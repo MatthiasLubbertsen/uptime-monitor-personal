@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Mijn app",
+    "url": "https://example.com/health",
+    "mode": "down",
+    "interval": "1m"
+  },
+  {
+    "name": "Favoriete service",
+    "url": "https://example.org/",
+    "mode": "up",
+    "interval": "5m"
+  }
+]
