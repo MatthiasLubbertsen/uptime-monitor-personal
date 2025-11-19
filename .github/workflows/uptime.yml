@@ -2,7 +2,7 @@ name: Site monitor
 
 on:
   schedule:
-    - cron: '*/1 * * * *' # probeert iedere minuut; GitHub kan minimum 5-min afdwingen
+    - cron: '*/5 * * * *' 
   workflow_dispatch: {}
 
 permissions:
