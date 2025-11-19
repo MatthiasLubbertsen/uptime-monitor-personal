@@ -1,5 +1,6 @@
 {
   "https://example.com": "up",
   "https://example.org": "up",
-  "https://jeroen.nl": "up"
+  "https://jeroen.nl": "up",
+  "https://flappy-http-status.vercel.app/": "down"
 }
