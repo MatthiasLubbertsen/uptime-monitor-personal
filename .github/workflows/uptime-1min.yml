@@ -17,18 +17,15 @@ jobs:
         with:
           persist-credentials: true
 
-      - name: Ensure status dir
-        run: mkdir -p .github
-
       - name: Check sites and send notifications
         env:
-          GCHAT_WEBHOOK: ${{ vars.GCHAT_WEBHOOK }}
+          GCHAT_WEBHOOK: ${{ secrets.GCHAT_WEBHOOK }}
         run: |
           python3 - <<'PY'
           import json, os, urllib.request, subprocess, sys
 
           SITES_FILE = "sites.json"
-          STATUS_FILE = ".github/site-status.json"
+          STATUS_FILE = "site-status.json"
 
           # Load sites.json
           try:
@@ -70,8 +67,9 @@ jobs:
               if old != state:
                   changes.append({"url": url, "from": old or "unknown", "to": state})
 
-          # Zorg dat statusfile bestaat en schrijf nieuwe status
-          os.makedirs(os.path.dirname(STATUS_FILE), exist_ok=True)
+          # Zorg dat statusfile directory bestaat en schrijf nieuwe status
+          dirpath = os.path.dirname(STATUS_FILE) or "."
+          os.makedirs(dirpath, exist_ok=True)
           with open(STATUS_FILE, "w") as f:
               json.dump(new, f, indent=2)
 
@@ -81,7 +79,7 @@ jobs:
 
           webhook = os.environ.get("GCHAT_WEBHOOK")
           if not webhook:
-              print("GCHAT_WEBHOOK niet ingesteld. Hieronder de wijzigingen:")
+              print("GCHAT_WEBHOOK niet ingesteld (repo secret). Hieronder de wijzigingen:")
               for c in changes:
                   print(c)
               sys.exit(0)
@@ -103,7 +101,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .github/site-status.json || true
+          git add site-status.json || true
           if git diff --staged --quiet; then
             echo "Geen wijzigingen om te committen."
           else
