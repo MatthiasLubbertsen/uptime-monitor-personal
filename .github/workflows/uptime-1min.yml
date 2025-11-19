@@ -1,48 +1,112 @@
-name: Uptime monitor (1m)
+name: Site monitor
+
 on:
   schedule:
-    - cron: '*/1 * * * *'
+    - cron: '*/1 * * * *' # probeert iedere minuut; GitHub kan minimum 5-min afdwingen
+  workflow_dispatch: {}
+
 permissions:
   contents: write
+
 jobs:
-  check:
+  check-sites:
     runs-on: ubuntu-latest
-    env:
-      CHECK_INTERVAL: '1m'
-      GCHAT_WEBHOOK: ${{ secrets.GCHAT_WEBHOOK }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          persist-credentials: true
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
+      - name: Ensure status dir
+        run: mkdir -p .github
 
-      - name: Cache npm
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
+      - name: Check sites and send notifications
+        env:
+          GCHAT_WEBHOOK: ${{ vars.GCHAT_WEBHOOK }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request, subprocess, sys
 
-      - name: Install dependencies
-        run: npm ci --prefer-offline --no-audit --no-fund || npm install --prefer-offline --no-audit --no-fund
+          SITES_FILE = "sites.json"
+          STATUS_FILE = ".github/site-status.json"
 
-      - name: Run monitor script
-        run: node ./scripts/check.js
+          # Load sites.json
+          try:
+              with open(SITES_FILE, "r") as f:
+                  sites = json.load(f)
+          except Exception as e:
+              print("ERROR: kon sites.json niet lezen:", e)
+              sys.exit(1)
 
-      - name: Commit statuses
+          # Load previous status
+          prev = {}
+          if os.path.exists(STATUS_FILE):
+              try:
+                  with open(STATUS_FILE, "r") as f:
+                      prev = json.load(f)
+              except Exception:
+                  prev = {}
+
+          new = dict(prev)
+          changes = []
+
+          for entry in sites:
+              url = entry.get("url")
+              if not url:
+                  continue
+              monitor = entry.get("monitor", True)
+              if not monitor:
+                  # skip sites die niet gemonitord moeten worden
+                  continue
+              try:
+                  req = urllib.request.Request(url, method="HEAD")
+                  resp = urllib.request.urlopen(req, timeout=10)
+                  up = 200 <= resp.getcode() < 400
+              except Exception:
+                  up = False
+              state = "up" if up else "down"
+              old = prev.get(url)
+              new[url] = state
+              if old != state:
+                  changes.append({"url": url, "from": old or "unknown", "to": state})
+
+          # Zorg dat statusfile bestaat en schrijf nieuwe status
+          os.makedirs(os.path.dirname(STATUS_FILE), exist_ok=True)
+          with open(STATUS_FILE, "w") as f:
+              json.dump(new, f, indent=2)
+
+          if not changes:
+              print("Geen statuswijzigingen.")
+              sys.exit(0)
+
+          webhook = os.environ.get("GCHAT_WEBHOOK")
+          if not webhook:
+              print("GCHAT_WEBHOOK niet ingesteld. Hieronder de wijzigingen:")
+              for c in changes:
+                  print(c)
+              sys.exit(0)
+
+          # Stuur melding per wijziging naar Google Chat webhook
+          for c in changes:
+              text = f"Site {c['url']} changed from {c['from']} to {c['to']}"
+              payload = json.dumps({"text": text})
+              subprocess.run([
+                  "curl", "-s", "-X", "POST",
+                  "-H", "Content-Type: application/json",
+                  "-d", payload,
+                  webhook
+              ])
+              print("Verstuurd melding:", text)
+          PY
+
+      - name: Commit status changes
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git status --porcelain | grep -q "statuses.json"; then
-            git add statuses.json
-            git commit -m "Update monitor statuses [ci skip]" || echo "no changes"
-            git push
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/site-status.json || true
+          if git diff --staged --quiet; then
+            echo "Geen wijzigingen om te committen."
           else
-            echo "No status changes to commit"
+            git commit -m "Update site-status (door GitHub Actions)"
+            git push
           fi
