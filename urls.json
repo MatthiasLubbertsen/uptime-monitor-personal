@@ -1,14 +1,18 @@
 [
   {
-    "name": "Mijn app",
-    "url": "https://example.com/health",
-    "mode": "down",
-    "interval": "1m"
+    "url": "https://example.com",
+    "monitor": true
   },
   {
-    "name": "Favoriete service",
-    "url": "https://example.org/",
-    "mode": "up",
-    "interval": "5m"
+    "url": "https://example.org",
+    "monitor": true
+  },
+  {
+    "url": "https://jeroen.nl",
+    "monitor": true
+  },
+  {
+    "url": "https://ignore.example.net",
+    "monitor": false
   }
 ]
