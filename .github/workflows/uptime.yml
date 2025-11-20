@@ -1,6 +1,6 @@
 on:
   schedule:
-    - cron: '*/5 * * * *'  # elke 5 minuten
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -29,94 +29,87 @@ jobs:
           echo "Starting uptime check..."
 
           if [ ! -f "$SITES_FILE" ]; then
-            echo "ERROR: $SITES_FILE not found in repo root."
+            echo "ERROR: $SITES_FILE not found."
             exit 1
           fi
 
-          # helper: UTC timestamp
           timestamp() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
 
           TMP_LINES=$(mktemp)
           TMP_NEW=$(mktemp)
 
-          # Build new status entries (tolerant for string items or objects with .url/.site)
+          # Build new status list
           jq -c '.[]' "$SITES_FILE" | while read -r item; do
             url=$(echo "$item" | jq -r 'if type=="string" then . elif has("url") then .url elif has("site") then .site elif has("link") then .link else "" end')
             if [ -z "$url" ] || [ "$url" = "null" ]; then
               echo "Skipping invalid site entry: $item" >&2
               continue
             fi
-            # try to get an optional name field, else fallback to url
+
             name=$(echo "$item" | jq -r 'if type=="object" and has("name") then .name else empty end' | sed -n '1p' || true)
             if [ -z "$name" ]; then name="$url"; fi
 
-            # Get HTTP status (timeout 15s). On error return 000
             code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$url" || echo "000")
             ts=$(timestamp)
             echo "{\"url\":\"$url\",\"name\":\"$name\",\"status_code\":$code,\"timestamp\":\"$ts\"}" >> "$TMP_LINES"
           done
 
-          # Convert lines to JSON array
           jq -s '.' "$TMP_LINES" > "$TMP_NEW"
           rm -f "$TMP_LINES"
 
-          # Ensure old status file exists (if not create an empty array)
           if [ ! -f "$STATUS_FILE" ]; then
             echo "[]" > "$STATUS_FILE"
           fi
 
-          # Compare: detect any change in status_code per url
           CHANGES=""
-          # iterate new entries
-          jq -c '.[]' "$TMP_NEW" | while read -r new; do
+
+          # ✔ FIXED: no subshell! using process substitution
+          while read -r new; do
             url=$(echo "$new" | jq -r '.url')
             new_code=$(echo "$new" | jq -r '.status_code')
-            # find old code (empty if not found)
+
             old_code=$(jq -r --arg u "$url" '.[] | select(.url==$u) | .status_code' "$STATUS_FILE" 2>/dev/null || true)
             if [ -z "$old_code" ]; then old_code="(none)"; fi
-            if [ "$new_code" != "$old_code" ]; then
-              CHANGES="${CHANGES}${url}: ${old_code} -> ${new_code}\\n"
-            fi
-          done
 
-          # Show debug output always
+            if [ "$new_code" != "$old_code" ]; then
+              CHANGES="${CHANGES}${url}: ${old_code} -> ${new_code}\n"
+            fi
+          done < <(jq -c '.[]' "$TMP_NEW")
+
           echo "----- OLD STATUS -----"
           cat "$STATUS_FILE" || true
           echo "----- NEW STATUS -----"
           cat "$TMP_NEW" || true
           echo "----- CHANGE SUMMARY -----"
           if [ -z "$CHANGES" ]; then
-            echo "No status_code changes detected."
+            echo "No status changes."
           else
             echo -e "$CHANGES"
           fi
 
-          # If there are changes, update file, commit and push, and notify GChat
+          # If changes: commit + push + notify
           if [ -n "$CHANGES" ]; then
             cp "$TMP_NEW" "$STATUS_FILE"
 
-            # Git commit & push
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
             git add "$STATUS_FILE"
-            # commit only if there are changes (git will exit non-zero if no changes; handle that)
+
             if git diff --cached --quiet; then
-              echo "No changes to commit (unexpected)."
+              echo "No git changes? Unexpected."
             else
               git commit -m "chore: update site-status.json from uptime monitor"
               git push
             fi
 
-            # Send GChat message (simple text). Make sure secret GCHAT_WEBHOOK is set.
             if [ -z "${GCHAT_WEBHOOK:-}" ]; then
-              echo "GCHAT_WEBHOOK secret not set; skipping notification."
+              echo "GChat webhook missing; skipping notify."
             else
-              # Build a short payload; limit message length
               MSG="Uptime changes detected:\n${CHANGES}"
-              # Trim message to 8000 chars to avoid giant payloads
               MSG=$(echo -e "$MSG" | head -c 8000)
               payload=$(jq -nc --arg t "$MSG" '{text:$t}')
-              curl -s -X POST -H 'Content-Type: application/json' -d "$payload" "$GCHAT_WEBHOOK" || echo "Failed to POST to GChat"
+              curl -s -X POST -H 'Content-Type: application/json' -d "$payload" "$GCHAT_WEBHOOK" || echo "Failed to notify GChat"
             fi
           fi
 
