@@ -1,110 +1,123 @@
-name: Site monitor
-
 on:
   schedule:
-    - cron: '*/5 * * * *' 
-  workflow_dispatch: {}
+    - cron: '*/5 * * * *'  # elke 5 minuten
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  check-sites:
+  monitor:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           persist-credentials: true
+          fetch-depth: 0
 
-      - name: Check sites and send notifications
+      - name: Install jq
+        run: sudo apt-get update -y && sudo apt-get install -y jq
+
+      - name: Uptime check, compare and notify
         env:
           GCHAT_WEBHOOK: ${{ secrets.GCHAT_WEBHOOK }}
+          SITES_FILE: sites.json
+          STATUS_FILE: site-status.json
         run: |
-          python3 - <<'PY'
-          import json, os, urllib.request, subprocess, sys
+          set -euo pipefail
+          echo "Starting uptime check..."
 
-          SITES_FILE = "sites.json"
-          STATUS_FILE = "site-status.json"
-
-          # Load sites.json
-          try:
-              with open(SITES_FILE, "r") as f:
-                  sites = json.load(f)
-          except Exception as e:
-              print("ERROR: kon sites.json niet lezen:", e)
-              sys.exit(1)
-
-          # Load previous status
-          prev = {}
-          if os.path.exists(STATUS_FILE):
-              try:
-                  with open(STATUS_FILE, "r") as f:
-                      prev = json.load(f)
-              except Exception:
-                  prev = {}
-
-          new = dict(prev)
-          changes = []
-
-          for entry in sites:
-              url = entry.get("url")
-              if not url:
-                  continue
-              monitor = entry.get("monitor", True)
-              if not monitor:
-                  # skip sites die niet gemonitord moeten worden
-                  continue
-              try:
-                  req = urllib.request.Request(url, method="HEAD")
-                  resp = urllib.request.urlopen(req, timeout=10)
-                  up = 200 <= resp.getcode() < 400
-              except Exception:
-                  up = False
-              state = "up" if up else "down"
-              old = prev.get(url)
-              new[url] = state
-              if old != state:
-                  changes.append({"url": url, "from": old or "unknown", "to": state})
-
-          # Zorg dat statusfile directory bestaat en schrijf nieuwe status
-          dirpath = os.path.dirname(STATUS_FILE) or "."
-          os.makedirs(dirpath, exist_ok=True)
-          with open(STATUS_FILE, "w") as f:
-              json.dump(new, f, indent=2)
-
-          if not changes:
-              print("Geen statuswijzigingen.")
-              sys.exit(0)
-
-          webhook = os.environ.get("GCHAT_WEBHOOK")
-          if not webhook:
-              print("GCHAT_WEBHOOK niet ingesteld (repo secret). Hieronder de wijzigingen:")
-              for c in changes:
-                  print(c)
-              sys.exit(0)
-
-          # Stuur melding per wijziging naar Google Chat webhook
-          for c in changes:
-              text = f"Site {c['url']} changed from {c['from']} to {c['to']}"
-              payload = json.dumps({"text": text})
-              subprocess.run([
-                  "curl", "-s", "-X", "POST",
-                  "-H", "Content-Type: application/json",
-                  "-d", payload,
-                  webhook
-              ])
-              print("Verstuurd melding:", text)
-          PY
-
-      - name: Commit status changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add site-status.json || true
-          if git diff --staged --quiet; then
-            echo "Geen wijzigingen om te committen."
-          else
-            git commit -m "Update site-status (door GitHub Actions)"
-            git push
+          if [ ! -f "$SITES_FILE" ]; then
+            echo "ERROR: $SITES_FILE not found in repo root."
+            exit 1
           fi
+
+          # helper: UTC timestamp
+          timestamp() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
+
+          TMP_LINES=$(mktemp)
+          TMP_NEW=$(mktemp)
+
+          # Build new status entries (tolerant for string items or objects with .url/.site)
+          jq -c '.[]' "$SITES_FILE" | while read -r item; do
+            url=$(echo "$item" | jq -r 'if type=="string" then . elif has("url") then .url elif has("site") then .site elif has("link") then .link else "" end')
+            if [ -z "$url" ] || [ "$url" = "null" ]; then
+              echo "Skipping invalid site entry: $item" >&2
+              continue
+            fi
+            # try to get an optional name field, else fallback to url
+            name=$(echo "$item" | jq -r 'if type=="object" and has("name") then .name else empty end' | sed -n '1p' || true)
+            if [ -z "$name" ]; then name="$url"; fi
+
+            # Get HTTP status (timeout 15s). On error return 000
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$url" || echo "000")
+            ts=$(timestamp)
+            echo "{\"url\":\"$url\",\"name\":\"$name\",\"status_code\":$code,\"timestamp\":\"$ts\"}" >> "$TMP_LINES"
+          done
+
+          # Convert lines to JSON array
+          jq -s '.' "$TMP_LINES" > "$TMP_NEW"
+          rm -f "$TMP_LINES"
+
+          # Ensure old status file exists (if not create an empty array)
+          if [ ! -f "$STATUS_FILE" ]; then
+            echo "[]" > "$STATUS_FILE"
+          fi
+
+          # Compare: detect any change in status_code per url
+          CHANGES=""
+          # iterate new entries
+          jq -c '.[]' "$TMP_NEW" | while read -r new; do
+            url=$(echo "$new" | jq -r '.url')
+            new_code=$(echo "$new" | jq -r '.status_code')
+            # find old code (empty if not found)
+            old_code=$(jq -r --arg u "$url" '.[] | select(.url==$u) | .status_code' "$STATUS_FILE" 2>/dev/null || true)
+            if [ -z "$old_code" ]; then old_code="(none)"; fi
+            if [ "$new_code" != "$old_code" ]; then
+              CHANGES="${CHANGES}${url}: ${old_code} -> ${new_code}\\n"
+            fi
+          done
+
+          # Show debug output always
+          echo "----- OLD STATUS -----"
+          cat "$STATUS_FILE" || true
+          echo "----- NEW STATUS -----"
+          cat "$TMP_NEW" || true
+          echo "----- CHANGE SUMMARY -----"
+          if [ -z "$CHANGES" ]; then
+            echo "No status_code changes detected."
+          else
+            echo -e "$CHANGES"
+          fi
+
+          # If there are changes, update file, commit and push, and notify GChat
+          if [ -n "$CHANGES" ]; then
+            cp "$TMP_NEW" "$STATUS_FILE"
+
+            # Git commit & push
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add "$STATUS_FILE"
+            # commit only if there are changes (git will exit non-zero if no changes; handle that)
+            if git diff --cached --quiet; then
+              echo "No changes to commit (unexpected)."
+            else
+              git commit -m "chore: update site-status.json from uptime monitor"
+              git push
+            fi
+
+            # Send GChat message (simple text). Make sure secret GCHAT_WEBHOOK is set.
+            if [ -z "${GCHAT_WEBHOOK:-}" ]; then
+              echo "GCHAT_WEBHOOK secret not set; skipping notification."
+            else
+              # Build a short payload; limit message length
+              MSG="Uptime changes detected:\n${CHANGES}"
+              # Trim message to 8000 chars to avoid giant payloads
+              MSG=$(echo -e "$MSG" | head -c 8000)
+              payload=$(jq -nc --arg t "$MSG" '{text:$t}')
+              curl -s -X POST -H 'Content-Type: application/json' -d "$payload" "$GCHAT_WEBHOOK" || echo "Failed to POST to GChat"
+            fi
+          fi
+
+          rm -f "$TMP_NEW"
