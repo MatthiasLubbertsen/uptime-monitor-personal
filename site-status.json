@@ -3,24 +3,24 @@
     "url": "https://example.com",
     "name": "https://example.com",
     "status_code": 200,
-    "timestamp": "2025-11-20T19:44:42Z"
+    "timestamp": "2025-11-20T20:27:00Z"
   },
   {
     "url": "https://example.org",
     "name": "https://example.org",
     "status_code": 200,
-    "timestamp": "2025-11-20T19:44:42Z"
+    "timestamp": "2025-11-20T20:27:00Z"
   },
   {
     "url": "https://flappy-http-status.vercel.app/",
     "name": "https://flappy-http-status.vercel.app/",
-    "status_code": 200,
-    "timestamp": "2025-11-20T19:44:43Z"
+    "status_code": 500,
+    "timestamp": "2025-11-20T20:27:01Z"
   },
   {
     "url": "https://ignore.example.net",
     "name": "https://ignore.example.net",
     "status_code": 0,
-    "timestamp": "2025-11-20T19:44:43Z"
+    "timestamp": "2025-11-20T20:27:01Z"
   }
 ]
