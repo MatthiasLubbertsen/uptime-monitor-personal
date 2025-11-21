@@ -1,6 +1,8 @@
+name: Uptime Monitor
+
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -10,7 +12,7 @@ jobs:
   monitor:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
         with:
           persist-credentials: true
@@ -19,101 +21,139 @@ jobs:
       - name: Install jq
         run: sudo apt-get update -y && sudo apt-get install -y jq
 
-      - name: Uptime check, compare and notify
+      - name: Run monitor
         env:
           GCHAT_WEBHOOK: ${{ secrets.GCHAT_WEBHOOK }}
-          SITES_FILE: sites.json
-          STATUS_FILE: site-status.json
         run: |
           set -euo pipefail
-          echo "Starting uptime check..."
 
-          timestamp() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
+          SITES_FILE="sites.json"
+          STATUS_FILE="site-status.json"
 
           if [ ! -f "$SITES_FILE" ]; then
-            echo "ERROR: $SITES_FILE not found."
+            echo "ERROR: $SITES_FILE does not exist."
             exit 1
           fi
 
-          TMP_LINES=$(mktemp)
+          timestamp() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
+
           TMP_NEW=$(mktemp)
 
-          # Build new status entries
+          # Build new statuses
           jq -c '.[]' "$SITES_FILE" | while read -r item; do
             monitor=$(echo "$item" | jq -r 'if has("monitor") then .monitor else "true" end')
-
             if [ "$monitor" = "false" ]; then
               echo "Skipping (monitor=false): $item"
               continue
             fi
 
-            url=$(echo "$item" | jq -r 'if type=="string" then . elif has("url") then .url elif has("site") then .site elif has("link") then .link else "" end')
-            if [ -z "$url" ] || [ "$url" = "null" ]; then
-              echo "Skipping invalid site entry: $item"
-              continue
-            fi
+            url=$(echo "$item" | jq -r '
+              if type=="string" then . 
+              elif has("url") then .url
+              elif has("site") then .site
+              else "" end')
 
-            name=$(echo "$item" | jq -r 'if has("name") then .name else "" end')
-            if [ -z "$name" ] || [ "$name" = "null" ]; then name="$url"; fi
+            [ -z "$url" ] && continue
+
+            name=$(echo "$item" | jq -r 'if has("name") then .name else empty end')
+            [ -z "$name" ] && name="$url"
 
             code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$url" || echo "000")
             ts=$(timestamp)
 
-            echo "{\"url\":\"$url\",\"name\":\"$name\",\"status_code\":$code,\"timestamp\":\"$ts\"}" >> "$TMP_LINES"
+            echo "{\"url\":\"$url\",\"name\":\"$name\",\"status_code\":$code,\"timestamp\":\"$ts\"}" >> "$TMP_NEW"
           done
 
-          jq -s '.' "$TMP_LINES" > "$TMP_NEW"
-          rm -f "$TMP_LINES"
+          # Convert to array
+          NEW_JSON=$(jq -s '.' "$TMP_NEW")
+          rm "$TMP_NEW"
 
-          if [ ! -f "$STATUS_FILE" ]; then
-            echo "[]" > "$STATUS_FILE"
-          fi
+          [ ! -f "$STATUS_FILE" ] && echo "[]" > "$STATUS_FILE"
 
-          CHANGES_FOUND="false"
+          OLD_JSON=$(cat "$STATUS_FILE")
 
-          while read -r new; do
+          # Loop over new statuses
+          echo "$NEW_JSON" | jq -c '.[]' | while read -r new; do
             url=$(echo "$new" | jq -r '.url')
-            name=$(echo "$new" | jq -r '.name')
             new_code=$(echo "$new" | jq -r '.status_code')
+            name=$(echo "$new" | jq -r '.name')
             ts=$(echo "$new" | jq -r '.timestamp')
 
-            old_code=$(jq -r --arg u "$url" '.[] | select(.url==$u) | .status_code' "$STATUS_FILE" || true)
-            if [ -z "$old_code" ]; then old_code="(none)"; fi
+            old_code=$(echo "$OLD_JSON" | jq -r --arg u "$url" '
+              .[] | select(.url==$u) | .status_code' || true)
+
+            [ -z "$old_code" ] && old_code="(none)"
 
             if [ "$new_code" != "$old_code" ]; then
-              CHANGES_FOUND="true"
 
-              alertType="NEUTRAL"
-              if [ "$old_code" = "200" ] && [ "$new_code" != "200" ]; then
-                alertType="BAD"
-              elif [ "$old_code" != "200" ] && [ "$new_code" = "200" ]; then
-                alertType="GOOD"
-              fi
+              # Icon select
+              icon_for_code() {
+                code="$1"
+                if [ "$code" = "(none)" ] || [ "$code" = "000" ]; then
+                  echo "BUG_REPORT"
+                elif [ "$code" -ge 200 ] && [ "$code" -le 299 ]; then
+                  echo "CHECK_CIRCLE"
+                elif [ "$code" -ge 300 ] && [ "$code" -le 399 ]; then
+                  echo "STAR"
+                elif [ "$code" -ge 400 ] && [ "$code" -le 499 ]; then
+                  echo "WARNING"
+                elif [ "$code" -ge 500 ] && [ "$code" -le 599 ]; then
+                  echo "ERROR"
+                else
+                  echo "STAR"
+                fi
+              }
 
-              msg=$(jq -nc \
-                --arg name "$name" \
-                --arg url "$url" \
-                --arg old "$old_code" \
-                --arg new "$new_code" \
-                --arg ts "$ts" \
-                --arg type "$alertType" \
-                '
+              newIcon=$(icon_for_code "$new_code")
+              oldIcon=$(icon_for_code "$old_code")
+
+              # Build Google Chat card from template ------------------------
+              msg=$(cat << EOF
 {
-  cardsV2: [
+  "cardsV2": [
     {
-      cardId: "uptime-update",
-      card: {
-        header: {
-          title: ("Status update: " + $name),
-          subtitle: ($type + " | " + $ts)
+      "cardId": "uptime-update",
+      "card": {
+        "header": {
+          "title": "$name",
+          "subtitle": "$url",
+          "imageUrl": "https://cdn-icons-png.flaticon.com/512/1827/1827504.png",
+          "imageStyle": "AVATAR"
         },
-        sections: [
+        "sections": [
           {
-            header: "Details",
-            widgets: [
-              { keyValue: { topLabel: "URL", content: $url }},
-              { keyValue: { topLabel: "Old status", content: $old }},
-              { keyValue: { topLabel: "New status", content: $new }}
+            "header": "Status Update",
+            "widgets": [
+              {
+                "decoratedText": {
+                  "startIcon": {
+                    "knownIcon": "$newIcon"
+                  },
+                  "text": "Nieuwe statuscode: <b>$new_code</b>"
+                }
+              },
+              {
+                "decoratedText": {
+                  "startIcon": {
+                    "knownIcon": "$oldIcon"
+                  },
+                  "text": "Vorige statuscode: $old_code"
+                }
+              },
+              {
+                "buttonList": {
+                  "buttons": [
+                    {
+                      "text": "Open website",
+                      "onClick": {
+                        "openLink": {
+                          "url": "$url"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
             ]
           }
         ]
@@ -121,34 +161,24 @@ jobs:
     }
   ]
 }
-                ')
+EOF
+)
 
-              if [ -n "${GCHAT_WEBHOOK:-}" ]; then
-                curl -s -X POST -H 'Content-Type: application/json' -d "$msg" "$GCHAT_WEBHOOK" \
-                  || echo "Failed to send to GChat"
-              else
-                echo "No GCHAT_WEBHOOK; skipping notification."
-              fi
+              curl -s -X POST \
+                -H "Content-Type: application/json" \
+                -d "$msg" \
+                "$GCHAT_WEBHOOK"
+
             fi
+          done
 
-          done < <(jq -c '.[]' "$TMP_NEW")
+          echo "$NEW_JSON" > "$STATUS_FILE"
 
-          if [ "$CHANGES_FOUND" = "true" ]; then
-            cp "$TMP_NEW" "$STATUS_FILE"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$STATUS_FILE"
 
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-            git add "$STATUS_FILE"
-
-            if git diff --cached --quiet; then
-              echo "No git changes? Unexpected."
-            else
-              git commit -m "chore: update site-status.json (uptime monitor)"
-              git push
-            fi
-          else
-            echo "No changes detected."
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update uptime data"
+            git push
           fi
-
-          rm -f "$TMP_NEW"
