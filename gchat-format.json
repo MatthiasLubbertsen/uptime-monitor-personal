@@ -1,0 +1,38 @@
+{
+  "cardsV2": [
+    {
+      "cardId": "uptime-update",
+      "card": {
+        "header": {
+          "title": "Status update: {{SITE_NAME}}",
+          "subtitle": "{{TYPE}} | {{TIMESTAMP}}"
+        },
+        "sections": [
+          {
+            "header": "Details",
+            "widgets": [
+              {
+                "keyValue": {
+                  "topLabel": "URL",
+                  "content": "{{URL}}"
+                }
+              },
+              {
+                "keyValue": {
+                  "topLabel": "Old status",
+                  "content": "{{OLD_STATUS}}"
+                }
+              },
+              {
+                "keyValue": {
+                  "topLabel": "New status",
+                  "content": "{{NEW_STATUS}}"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
