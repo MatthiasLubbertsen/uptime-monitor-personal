@@ -1,18 +1,17 @@
 [
   {
+    "name": "Google",
+    "url": "https://google.com",
+    "monitor": true
+  },
+  {
+    "name": "Flappy HTTP Status",
+    "url": "https://flappy-http-status.vercel.app",
+    "monitor": true
+  },
+  {
+    "name": "Testsite die je niet wil monitoren",
     "url": "https://example.com",
-    "monitor": true
-  },
-  {
-    "url": "https://example.org",
-    "monitor": true
-  },
-  {
-    "url": "https://flappy-http-status.vercel.app/",
-    "monitor": true
-  },
-  {
-    "url": "https://ignore.example.net",
     "monitor": false
   }
 ]
