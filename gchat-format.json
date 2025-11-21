@@ -1,38 +1,50 @@
 {
-  "cardsV2": [
-    {
-      "cardId": "uptime-update",
-      "card": {
-        "header": {
-          "title": "Status update: {{SITE_NAME}}",
-          "subtitle": "{{TYPE}} | {{TIMESTAMP}}"
-        },
-        "sections": [
-          {
-            "header": "Details",
-            "widgets": [
-              {
-                "keyValue": {
-                  "topLabel": "URL",
-                  "content": "{{URL}}"
-                }
-              },
-              {
-                "keyValue": {
-                  "topLabel": "Old status",
-                  "content": "{{OLD_STATUS}}"
-                }
-              },
-              {
-                "keyValue": {
-                  "topLabel": "New status",
-                  "content": "{{NEW_STATUS}}"
-                }
+  "cardTemplate": {
+    "cardId": "uptime-monitor",
+    "card": {
+      "header": {
+        "title": "{{name}}",
+        "subtitle": "{{url}}",
+        "imageUrl": "https://cdn-icons-png.flaticon.com/512/1827/1827504.png",
+        "imageStyle": "AVATAR"
+      },
+      "sections": [
+        {
+          "header": "Status Update",
+          "widgets": [
+            {
+              "decoratedText": {
+                "startIcon": {
+                  "knownIcon": "{{newIcon}}"
+                },
+                "text": "Nieuwe statuscode: <b>{{newStatus}}</b>"
               }
-            ]
-          }
-        ]
-      }
+            },
+            {
+              "decoratedText": {
+                "startIcon": {
+                  "knownIcon": "{{oldIcon}}"
+                },
+                "text": "Vorige statuscode: {{oldStatus}}"
+              }
+            },
+            {
+              "buttonList": {
+                "buttons": [
+                  {
+                    "text": "Open website",
+                    "onClick": {
+                      "openLink": {
+                        "url": "{{url}}"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
     }
-  ]
+  }
 }
